@@ -81,7 +81,7 @@ func MCPCompletionEndpoint(cl *config.ModelConfigLoader, ml *model.ModelLoader, 
 		}
 
 		apiKey := ""
-		if appConfig.ApiKeys != nil {
+		if appConfig.ApiKeys != nil && len(appConfig.ApiKeys) > 0 {
 			apiKey = appConfig.ApiKeys[0]
 		}
 
@@ -108,11 +108,17 @@ func MCPCompletionEndpoint(cl *config.ModelConfigLoader, ml *model.ModelLoader, 
 				log.Debug().Msgf("[model agent] [model: %s] Reasoning: %s", config.Name, s)
 			}),
 			cogito.WithToolCallBack(func(t *cogito.ToolChoice) bool {
-				log.Debug().Msgf("[model agent] [model: %s] Tool call: %s, reasoning: %s, arguments: %+v", t.Name, t.Reasoning, t.Arguments)
+				log.Debug().Msgf(
+					"[model agent] [model: %s] Tool call: %s, reasoning: %s, arguments: %+v",
+					config.Name, t.Name, t.Reasoning, t.Arguments,
+				)
 				return true
 			}),
 			cogito.WithToolCallResultCallback(func(t cogito.ToolStatus) {
-				log.Debug().Msgf("[model agent] [model: %s] Tool call result: %s, tool arguments: %+v", t.Name, t.Result, t.ToolArguments)
+				log.Debug().Msgf(
+					"[model agent] [model: %s] Tool call result: %s, tool arguments: %+v",
+					config.Name, t.Name, t.ToolArguments,
+				)
 			}),
 		)
 
@@ -124,17 +130,29 @@ func MCPCompletionEndpoint(cl *config.ModelConfigLoader, ml *model.ModelLoader, 
 			return err
 		}
 
-		f, err = defaultLLM.Ask(ctx, f)
+		// Use the cancellable context here as well
+		f, err = defaultLLM.Ask(ctxWithCancellation, f)
 		if err != nil {
 			return err
 		}
+
+		content := f.LastMessage().Content
 
 		resp := &schema.OpenAIResponse{
 			ID:      id,
 			Created: created,
 			Model:   input.Model, // we have to return what the user sent here, due to OpenAI spec.
-			Choices: []schema.Choice{{Message: &schema.Message{Role: "assistant", Content: &f.LastMessage().Content}}},
-			Object:  "text_completion",
+			Choices: []schema.Choice{
+				{
+					Message: &schema.Message{
+						Role:    "assistant",
+						Content: &content,
+					},
+				},
+			},
+			// IMPORTANT: this must be "chat.completion" so that MCP/UI treat it
+			// like a standard chat completion, not a legacy text completion.
+			Object: "chat.completion",
 		}
 
 		jsonResult, _ := json.Marshal(resp)
